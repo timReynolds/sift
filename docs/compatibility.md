@@ -7,6 +7,7 @@ The lockfile pins the installed dependency graph. Direct dependencies use exact 
 | Pi Durable, Pi AI, Chord | 1.0.2 | npm package exports and declarations; upstream commit `cd32f7725fdbddbaecdff5b1e68491563394e0ca` |
 | Official GitHub MCP server | 1.14.0 | release source at `v1.14.0` |
 | MCP TypeScript SDK | 1.32.0 | installed package |
+| Octokit REST client and endpoint types | 22.0.1 | [official package exports](https://github.com/octokit/rest.js/blob/v22.0.1/src/index.ts) |
 | Google Cloud Storage SDK | 8.2.0 | installed package |
 | Node | 24 LTS | Pi requires at least 22.19; Sift uses Node's built-in SQLite |
 
@@ -28,5 +29,9 @@ The [GitHub profile format](https://docs.github.com/en/copilot/reference/custom-
 The operational adapter uses native MCP writes for pending reviews, inline comments, replies, submission and owned-thread resolution. Its allowlist is explicit (14 tools). `get_job_logs` is forced to return content, not a signed download URL. The model-facing connection is read-only; the publication connection is host-only. Unsupported method/tool schemas fail during connection, and server version must equal the pin.
 
 The pinned server omits numeric IDs in review-thread comments and limits each thread to its first 100 comments. Narrow GitHub REST reads supplement all inline comment pages, pending review comment pages, exact repository/head/base metadata, merge-base comparison and collaborator permissions. They do not form a second general GitHub tool surface. Other writes use the official server; no thread-resolution feature is omitted. Public GitHub.com is supported in v1; enterprise host configuration is not yet exposed.
+
+Those REST reads use `@octokit/rest` endpoint methods and its exported `RestEndpointMethodTypes`. Sift derives file, comment and review fields from these types, then keeps only its normalized review context. Runtime schemas still validate external data, repository identity and SHAs. A bounded page loop retains cancellation and rejects incomplete reads because the [pinned SDK paginator](https://github.com/octokit/plugin-paginate-rest.js/blob/v14.0.0/src/iterator.ts) treats HTTP 409 as an empty page and does not forward per-call request options. Only HTTP 5xx reads retry, at most twice; redirects remain rejected.
+
+The MCP adapter returns the SDK's `CallToolResult` type, and `CallToolResultSchema` validates receipts, including content variants and error flags. Advertised method enums are checked with Zod before applying Sift's allowlist. The SDK's stdio transport discards server stderr through its native `ignore` option so credentials cannot enter transcripts or persisted diagnostics. Existing Zod transforms validate and normalize GitHub comments together; reviews are validated once and converted through a named mapper.
 
 No live model review, GitHub review write, or authenticated GCS upload has been validated by the default tests. They exercise the real Pi harness and SQLite with deterministic provider responses; the optional Docker test uses real containers. See [the acceptance map](testing.md).
