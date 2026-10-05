@@ -57,7 +57,7 @@ Do not assume the SQLite file stores executable extensions, open MCP connections
 
 Honour root and nested AGENTS.md files for repository guidance, with directory scoping. AGENTS.md is repository instruction text, not a standard model/MCP configuration schema.
 
-Support GitHub-style .github/agents/*.agent.md profiles: Markdown instructions with YAML frontmatter for name, description, model, tools, and MCP server definitions. Support reasoning settings through a documented Sift override if the upstream format lacks an appropriate field. Clearly document supported fields and any compatibility differences.
+Support GitHub-style .agents/sift/*.agent.md profiles: Markdown instructions with YAML frontmatter for name, description, model, tools, and MCP server definitions. Support reasoning settings through a documented Sift override if the upstream format lacks an appropriate field. Clearly document supported fields and any compatibility differences.
 
 Provide an explicit Sift configuration file that selects available profiles, configures the lead, defines shared MCP connections, sets review policy, and controls persistence/execution. Profiles can come from local paths and an explicitly configured shared repository at a pinned ref. Repository-local profiles override shared profiles by stable name. Do not implicitly activate every unrelated agent profile found in a repository.
 
