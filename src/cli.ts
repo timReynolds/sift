@@ -84,9 +84,16 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     console.log('Configuration valid');
     return;
   }
-  throw new Error(
-    'The foundation branch provides configuration validation; review execution arrives in the delivery branch.',
-  );
+  const { runFromOptions } = await import('./runner.ts');
+  const { writeOutputs } = await import('./outputs.ts');
+  try {
+    const result = await runFromOptions(options);
+    await writeOutputs(result);
+    console.log(JSON.stringify(result));
+  } catch (error) {
+    await writeOutputs(error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
