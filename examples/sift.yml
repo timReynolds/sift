@@ -1,0 +1,25 @@
+version: 1
+name: Sift
+mention: sift
+model: anthropic/claude-sonnet-4-6
+reasoning: high
+lead: lead
+profiles: [correctness, security, tests, terraform]
+sources:
+  local: [.github/agents]
+agents:
+  security:
+    reasoning: high
+policy:
+  mode: enforcing
+  publishThrough: P2
+  blockThrough: P1
+  maxInlineComments: 30
+  drafts: skip
+persistence:
+  mode: local
+execution:
+  concurrency: 4
+  timeoutSeconds: 1800
+  commandTimeoutSeconds: 300
+  modelTimeoutSeconds: 180
