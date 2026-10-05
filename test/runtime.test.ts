@@ -17,6 +17,7 @@ import { Config } from '../src/config.ts';
 import { parseProfile } from '../src/profiles.ts';
 import { InvestigationDoc, openRuntime, type RuntimeOptions } from '../src/runtime.ts';
 import { ReviewDoc } from '../src/state.ts';
+import { LocalSnapshotStore, restoreDatabase, standaloneSnapshot } from '../src/persistence.ts';
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -595,7 +596,13 @@ test('pending Pi-owned specialist work resumes after SQLite restart without dupl
     const childId = before!.selected.correctness!.conversationId! as ConversationId;
     await runtime.harness.close(ctx);
 
-    // Arrange a new runtime over the existing SQLite database.
+    // Arrange a restored database in a new runtime.
+    const store = new LocalSnapshotStore(join(fixture.directory, 'store'));
+    const snapshotPath = join(fixture.directory, 'upload.sqlite');
+    await standaloneSnapshot(fixture.options.database, snapshotPath);
+    await store.write('state', await readFile(snapshotPath));
+    fixture.options.database = join(fixture.directory, 'download.sqlite');
+    await restoreDatabase(store, 'state', fixture.options.database);
     runtime = await openRuntime(fixture.options);
 
     // Act: resume the existing submission.
