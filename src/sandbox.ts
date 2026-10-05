@@ -22,10 +22,10 @@ export const DEFAULT_INVESTIGATION_IMAGE =
 
 function packageRoot(): string {
   let path = dirname(fileURLToPath(import.meta.url));
-  while (!existsSync(join(path, 'runtime/sandbox-worker.mjs'))) {
+  while (!existsSync(join(path, 'package.json'))) {
     const parent = dirname(path);
     if (parent === path) {
-      throw new Error('Sift sandbox worker is missing from the package');
+      throw new Error('Sift package root is missing');
     }
     path = parent;
   }
@@ -111,6 +111,15 @@ export async function createSandbox(options: {
     throw new Error('Investigation image must be pinned by digest');
   }
   const root = packageRoot();
+  const worker = join(root, 'dist/runtime/sandbox-worker.mjs');
+  if (!existsSync(worker)) {
+    throw new Error('Compiled Sift sandbox worker is missing; run npm run build');
+  }
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) {
+    throw new Error('Sift sandbox requires a Unix runner with user and group IDs');
+  }
   const workspace = await realpath(options.workspace);
   // Docker's --mount parser cannot quote commas in a source path.
   if ([workspace, root].some((path) => /[,\r\n]/.test(path))) {
@@ -125,6 +134,10 @@ export async function createSandbox(options: {
     container,
     '--label',
     'sift.investigation=true',
+    '--user',
+    `${uid}:${gid}`,
+    '--env',
+    'HOME=/tmp',
     '--cap-drop=ALL',
     '--security-opt=no-new-privileges',
     '--pids-limit=256',
@@ -135,7 +148,7 @@ export async function createSandbox(options: {
     '--mount',
     `type=bind,src=${join(root, 'node_modules')},dst=/opt/sift/node_modules,readonly`,
     '--mount',
-    `type=bind,src=${join(root, 'runtime/sandbox-worker.mjs')},dst=/opt/sift/worker.mjs,readonly`,
+    `type=bind,src=${worker},dst=/opt/sift/worker.mjs,readonly`,
     '--workdir=/work',
     image,
     'sleep',
