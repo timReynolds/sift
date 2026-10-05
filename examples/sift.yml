@@ -6,7 +6,7 @@ reasoning: high
 lead: lead
 profiles: [correctness, security, tests, terraform]
 sources:
-  local: [.github/agents]
+  local: [.agents/sift]
 agents:
   security:
     reasoning: high

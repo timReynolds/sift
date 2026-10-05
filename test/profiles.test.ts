@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Config } from '../src/config.ts';
+import { fileURLToPath } from 'node:url';
+import { Config, parseConfig } from '../src/config.ts';
 import { catalogue, codingToolNames, loadProfiles, parseProfile } from '../src/profiles.ts';
 import { instructionsFor, loadInstructions } from '../src/instructions.ts';
 
@@ -62,17 +63,17 @@ test('local profiles override a pinned shared source and unrelated profiles stay
 
   try {
     for (const root of [local, shared]) {
-      await mkdir(join(root, '.github/agents'), {
+      await mkdir(join(root, '.agents/sift'), {
         recursive: true,
       });
     }
     const profile = (name: string, description: string) =>
       `---\nname: ${name}\ndescription: ${description}\n---\nInvestigate.`;
-    await writeFile(join(shared, '.github/agents/lead.agent.md'), profile('lead', 'Lead'));
-    await writeFile(join(shared, '.github/agents/a.agent.md'), profile('correctness', 'Shared'));
-    await writeFile(join(local, '.github/agents/b.agent.md'), profile('correctness', 'Local'));
+    await writeFile(join(shared, '.agents/sift/lead.agent.md'), profile('lead', 'Lead'));
+    await writeFile(join(shared, '.agents/sift/a.agent.md'), profile('correctness', 'Shared'));
+    await writeFile(join(local, '.agents/sift/b.agent.md'), profile('correctness', 'Local'));
     await writeFile(
-      join(local, '.github/agents/unrelated.agent.md'),
+      join(local, '.agents/sift/unrelated.agent.md'),
       'This is not even a Sift profile',
     );
     const cfg = Config.parse({
@@ -100,7 +101,7 @@ test('local profiles override a pinned shared source and unrelated profiles stay
     ]);
 
     // Arrange a duplicate local profile, then verify loading rejects it.
-    await writeFile(join(local, '.github/agents/c.agent.md'), profile('correctness', 'Duplicate'));
+    await writeFile(join(local, '.agents/sift/c.agent.md'), profile('correctness', 'Duplicate'));
 
     await assert.rejects(loadProfiles(cfg, local, shared), /Duplicate profile/);
   } finally {
@@ -109,6 +110,21 @@ test('local profiles override a pinned shared source and unrelated profiles stay
       force: true,
     });
   }
+});
+
+test('starter profiles load from the example configuration', async () => {
+  // Arrange
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const source = await readFile(join(root, 'examples/sift.yml'), 'utf8');
+  const example = parseConfig(source);
+  const expectedNames = ['correctness', 'lead', 'security', 'terraform', 'tests'];
+
+  // Act
+  const profiles = await loadProfiles(example, root);
+  const names = [...profiles.keys()].sort();
+
+  // Assert
+  assert.deepEqual(names, expectedNames);
 });
 
 test('AGENTS guidance is directory-scoped and symlinks cannot import host instructions', async () => {
