@@ -8,7 +8,7 @@ The implementation runs in GitHub Actions or through the same local CLI. It uses
 
 ## Install in a repository
 
-1. Copy [examples/sift.yml](examples/sift.yml) to `.sift.yml`, and copy the selected [starter profiles](.github/agents) to `.github/agents`. Change the model and available specialist names as needed. Set `persistence.mode: gcs` and your existing bucket name.
+1. Copy [examples/sift.yml](examples/sift.yml) to `.sift.yml`, and copy the selected [starter profiles](.agents/sift) to `.agents/sift`. Change the model and available specialist names as needed. Set `persistence.mode: gcs` and your existing bucket name.
 2. Install a GitHub App with repository **Contents, Actions, Checks and Issues: read**, and **Pull requests: write**. Add its ID as `SIFT_APP_ID` and private key as `SIFT_APP_PRIVATE_KEY`. No App server or webhook receiver is needed. The token action creates a short-lived installation token.
 3. Configure Google Workload Identity Federation and an existing bucket. Set `SIFT_WIF_PROVIDER` and `SIFT_GCS_SERVICE_ACCOUNT` repository variables. The service account needs bucket object read/create/delete permissions to read snapshots and replace them with generation guards. Restrict the federation trust to this repository and approved workflow/ref. Sift does not create these resources.
 4. Add the chosen provider's credential, for example `ANTHROPIC_API_KEY`, as a repository secret.
