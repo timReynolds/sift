@@ -17,15 +17,24 @@ test('configuration has explicit available agents and conservative review defaul
     { ...config, profiles: ['security', 'security'] },
     { ...config, agents: { unrelated: { model: 'faux/other' } } },
   ];
+  const sharedSources = {
+    ...config,
+    sources: { shared: { repository: 'owner/profiles', ref: 'a'.repeat(40) } },
+  };
 
   // Act
   const parsed = Config.parse(config);
+  const shared = Config.parse(sharedSources);
 
   // Assert: conservative defaults
   assert.equal(parsed.policy.blockThrough, 'P1');
   assert.equal(parsed.policy.publishThrough, 'P2');
   assert.equal(parsed.policy.drafts, 'skip');
   assert.equal(parsed.execution.concurrency, 4);
+
+  // Assert: local and reusable profiles use the same dedicated directory.
+  assert.deepEqual(parsed.sources.local, ['.agents/sift']);
+  assert.equal(shared.sources.shared?.path, '.agents/sift');
 
   // Act and Assert: every override names an available specialist.
   for (const selection of invalidAgentSelections) {

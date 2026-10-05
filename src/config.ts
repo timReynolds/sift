@@ -65,12 +65,12 @@ export const Config = z
     profiles: z.array(StableName).min(1),
     sources: z
       .object({
-        local: z.array(RepoPath).default(['.github/agents']),
+        local: z.array(RepoPath).default(['.agents/sift']),
         shared: z
           .object({
             repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
             ref: Sha,
-            path: RepoPath.default('.github/agents'),
+            path: RepoPath.default('.agents/sift'),
           })
           .strict()
           .optional(),
