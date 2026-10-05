@@ -1,6 +1,6 @@
 # Profiles and the Pi runtime
 
-Sift's starter profiles live in `.github/agents`. They are examples selected explicitly through configuration, not a mandatory panel. The lead receives the available specialists' names, descriptions, and optional globs. The model makes applicability decisions and records reasons through `plan_review`; no path classifier silently chooses the reviewers.
+Sift's starter profiles live in `.agents/sift`, the default directory for local and shared definitions. They are examples selected explicitly through configuration, not a mandatory panel. The lead receives the available specialists' names, descriptions, and optional globs. The model makes applicability decisions and records reasons through `plan_review`; no path classifier silently chooses the reviewers.
 
 ## Agent profile compatibility
 
@@ -22,6 +22,8 @@ Pi documents hold review scope, selections, findings, publication state, importe
 
 All Pi filesystem and shell operations run in an investigator container, including absolute paths and symlink targets. Each workspace gets a separate checkout and container. Only that workspace is mounted writable. Sift's worker and dependency directory are mounted read-only. No Docker socket, runner home, model credentials, GitHub token, GCS credentials, or cloud deployment credentials are mounted or passed into the container. The default Node 24 image is pinned by digest; trusted configuration can supply another image with Node 24, Bash, and the investigation dependencies needed by the repository.
 
+The readable worker source is `runtime/sandbox-worker.mts`. `npm run build` compiles it to `dist/runtime/sandbox-worker.mjs`, which the host mounts into the container. Containers run with the Unix runner's UID and GID so investigators can edit runner-owned files and the host can remove their output. Their fixed `HOME=/tmp` supports tool caches without exposing the runner's home directory. GitHub-hosted Ubuntu runners provide the Docker engine needed by this path.
+
 Containers retain normal network access for dependency installation and investigation. They are not a security boundary for hostile repositories; v1 supports trusted internal PRs. Commands have a host-enforced timeout. Cancellation stops the container, since terminating the Docker client alone would not reliably terminate its child commands. Background processes do not survive restoration. Investigation files are preserved separately from Pi's database by the snapshot persistence layer.
 
-The default tests use real Pi/SQLite and explicitly injected temporary local test environments. Run the additional real Docker boundary test with `SIFT_DOCKER_TEST=1 SIFT_TEST_SECRET=must-not-leak npm test`. No live model or cloud credentials are required.
+The default tests use real Pi/SQLite and explicitly injected temporary local test environments. Run `npm run build` before the additional real Docker boundary test, then `SIFT_DOCKER_TEST=1 SIFT_TEST_SECRET=must-not-leak npm test`. No live model or cloud credentials are required.
