@@ -7,8 +7,11 @@
   "engines": {
     "node": ">=24.0.0 <25"
   },
+  "bin": {
+    "sift": "dist/src/cli.js"
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/src/cli.js",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write --unsafe .",
