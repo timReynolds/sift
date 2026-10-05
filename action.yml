@@ -1,0 +1,92 @@
+name: Sift review
+description: Durable multi-agent code review with isolated coding investigators and GCS SQLite snapshots
+inputs:
+  config:
+    description: Sift configuration path in the trusted ref
+    default: .sift.yml
+  trusted-ref:
+    description: Full commit SHA of the trusted configuration and profile revision
+    required: true
+  repository:
+    description: owner/repository (defaults to the workflow repository)
+    default: ${{ github.repository }}
+  pr:
+    description: PR number; otherwise inferred from the supported event
+  state:
+    description: Local runner scratch directory (persistent state is downloaded here)
+    default: ${{ runner.temp }}/sift-state
+  read-token:
+    description: Separate read-only GitHub token for model-facing MCP and source fetch
+    required: true
+  write-token:
+    description: GitHub App installation or workflow token for host-only publication
+    required: true
+  bot-login:
+    description: Login owning Sift reviews, usually APP-SLUG[bot]
+    default: github-actions[bot]
+  dry-run:
+    description: Compute a review plan without GitHub mutations
+    default: 'false'
+outputs:
+  status:
+    description: reviewed, skipped, or failed
+    value: ${{ steps.review.outputs.status }}
+  reviewed-revision:
+    description: Exact PR head investigated
+    value: ${{ steps.review.outputs.reviewed-revision }}
+  verdict:
+    description: APPROVE, REQUEST_CHANGES, or COMMENT; independent of operational success
+    value: ${{ steps.review.outputs.verdict }}
+  operational-status:
+    description: successful or failed
+    value: ${{ steps.review.outputs.operational-status }}
+  publication-status:
+    description: planned, submitted, or not-confirmed
+    value: ${{ steps.review.outputs.publication-status }}
+  persistence-status:
+    description: saved, failed, or not-attempted
+    value: ${{ steps.review.outputs.persistence-status }}
+  selected-agents:
+    description: JSON array of selected specialist names
+    value: ${{ steps.review.outputs.selected-agents }}
+  skipped-agents:
+    description: JSON array with skip reasons
+    value: ${{ steps.review.outputs.skipped-agents }}
+  failed-agents:
+    description: JSON array with failure reasons
+    value: ${{ steps.review.outputs.failed-agents }}
+  findings:
+    description: JSON active accepted finding counts by priority
+    value: ${{ steps.review.outputs.findings }}
+  coverage-gaps:
+    description: JSON unresolved coverage gaps
+    value: ${{ steps.review.outputs.coverage-gaps }}
+  usage:
+    description: JSON measured cumulative Pi session usage by model and tool
+    value: ${{ steps.review.outputs.usage }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      with:
+        node-version: '24'
+    - name: Install the pinned Sift engine
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm ci --ignore-scripts
+        npm run build
+    - name: Review
+      id: review
+      shell: bash
+      env:
+        SIFT_INPUT_CONFIG: ${{ inputs.config }}
+        SIFT_INPUT_TRUSTED_REF: ${{ inputs.trusted-ref }}
+        SIFT_INPUT_REPOSITORY: ${{ inputs.repository }}
+        SIFT_INPUT_PR: ${{ inputs.pr }}
+        SIFT_INPUT_STATE: ${{ inputs.state }}
+        SIFT_INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        SIFT_GITHUB_READ_TOKEN: ${{ inputs.read-token }}
+        SIFT_GITHUB_WRITE_TOKEN: ${{ inputs.write-token }}
+        SIFT_BOT_LOGIN: ${{ inputs.bot-login }}
+      run: node "$GITHUB_ACTION_PATH/dist/src/action.js"
