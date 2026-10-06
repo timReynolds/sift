@@ -1,31 +1,54 @@
-# Acceptance coverage
+# Testing
 
-Run `npm run check` on Node 24: strict TypeScript, production build and the Node test runner. No real credentials are required. Tests inject fake external/model boundaries but do not replace Pi Durable or SQLite with mocks.
+Use the Node version selected by [`.node-version`](../.node-version) (Node 24). From the repository root:
 
-| Acceptance behavior | Executable coverage |
+```sh
+npm ci --ignore-scripts
+npm run lint:fix
+npm run check
+```
+
+`check` runs Biome, strict TypeScript checking, the production build and the Node test runner. The default suite needs no real credentials. It uses deterministic model responses and fake external-service boundaries while exercising real Pi Durable tasks, documents and SQLite storage.
+
+To run one test file after building:
+
+```sh
+npm run build
+node --experimental-strip-types --test test/engine.test.ts
+```
+
+Follow the [contributor guidance](../AGENTS.md) when adding tests: make Arrange, Act and Assert phases clear, name scenario inputs and results, and keep cleanup in `finally`.
+
+## Coverage
+
+| Behavior | Test files |
 | --- | --- |
-| Relevant specialist selection, explicit Terraform skip | `runtime.test.ts`, `engine.test.ts` |
-| Different configured models and isolated coding tools | `runtime.test.ts`; optional real Docker in `sandbox.test.ts` |
-| Next-request capability activation and restart | `runtime.test.ts` with real Pi/SQLite |
-| Semantic duplicate merge, recorded nit/unsupported rejection | `review-publication.test.ts` |
-| Conditional defects and independent priority/confidence | `review-publication.test.ts`, `contracts.test.ts` |
-| Native APPROVE, REQUEST_CHANGES and COMMENT policy | `engine.test.ts`, `review-publication.test.ts`, `github-publication.test.ts` |
-| Fix recheck, own-thread resolution, refreshed approval | Full restored-session scenario in `engine.test.ts` |
-| Human reply imported/answered once; bot filtering | `engine.test.ts`, `review-publication.test.ts`, `mcp-events.test.ts` |
-| Stale-head approval rejection and stacked comparison | `review-publication.test.ts`, `github-context.test.ts` |
-| Specialist failure is incomplete coverage | `runtime.test.ts`, `engine.test.ts` |
-| Accepted GitHub write with lost local response/state | `review-publication.test.ts` |
-| Partial pending review; invalid/missing anchors | `review-publication.test.ts`, `github-publication.test.ts` |
-| SQLite upload/download/reopen of durable state and pending work | `runtime.test.ts`, `persistence.test.ts`, `engine.test.ts` |
-| Committed WAL survives standalone backup | `persistence.test.ts` keeps a real WAL open during snapshot |
-| GCS generation conflict and lost response guards | `persistence.test.ts` fake GCS SDK-shaped boundary |
-| Ordinary failure attempts persistence; failed upload visible | `persistence.test.ts`, `action.test.ts` |
-| Required artifact restores or explicitly restarts | `artifacts.test.ts`, `engine.test.ts` |
-| Dry-run has no GitHub mutations; credential-free investigations | `engine.test.ts`, `review-publication.test.ts`, `sandbox.test.ts` |
-| Action and CLI share one engine | `action.test.ts`, `action.ts` → `cli.ts` → `runner.ts` → `engine.ts` |
+| Finding contracts, configuration, CLI validation and profile loading | [contracts](../test/contracts.test.ts), [config](../test/config.test.ts), [profiles](../test/profiles.test.ts) |
+| Specialist selection, per-agent models, isolated workspaces, follow-ups and restart | [runtime](../test/runtime.test.ts), [pi-sqlite](../test/pi-sqlite.test.ts) |
+| Capability activation, MCP schemas, scope and secret redaction | [runtime](../test/runtime.test.ts), [mcp](../test/mcp.test.ts) |
+| Event normalization, complete PR discussion and exact stacked comparisons | [events](../test/events.test.ts), [GitHub context](../test/github-context.test.ts) |
+| Deduplication, rejection reasons, priority/confidence and verdict policy | [review](../test/review.test.ts) |
+| Native GitHub reviews, ambiguous writes, partial publication and stale revisions | [publication](../test/publication.test.ts), [GitHub publication](../test/github-publication.test.ts) |
+| Fixed findings, thread resolution/reopening and human replies without duplication | [publication](../test/publication.test.ts), [engine](../test/engine.test.ts) |
+| SQLite restart, committed WAL backup, guarded GCS generations and persistence failure | [persistence](../test/persistence.test.ts), [pi-sqlite](../test/pi-sqlite.test.ts) |
+| Exact source export, changed investigation files and artifact restoration guards | [workspaces](../test/workspaces.test.ts), [artifacts](../test/artifacts.test.ts) |
+| Full review lifecycle, failed coverage, missing artifacts and graceful cancellation | [engine](../test/engine.test.ts) |
+| Container configuration and Action forwarding/output status | [sandbox](../test/sandbox.test.ts), [Action](../test/action.test.ts) |
 
-MCP protocol tests use the real TypeScript MCP client/server transports with scripted tool responses. GitHub context tests simulate HTTP and MCP pagination, including more than 100 replies. Publication tests simulate accepted writes, transport failure, missing comments and denied approval. GCS tests retain exact string generations, preconditions and metadata semantics while keeping bytes local. Engine tests use real Pi faux providers, tasks, documents, SQLite snapshots, workspace artifact capture, and reopen across revisions.
+MCP tests use real SDK client/server transports with scripted responses. GitHub tests simulate HTTP and MCP pagination, including threads with more than 100 replies. GCS tests simulate the storage SDK boundary while preserving exact string generations, metadata and precondition behavior. Engine tests use real Pi and SQLite across review, restart, reply and recheck stages; coding environments and network services are injected.
 
-The real Docker test is opt-in locally (`SIFT_DOCKER_TEST=1 SIFT_TEST_SECRET=must-not-leak npm test`) and enabled in the repository CI workflow. It proves Pi shell/filesystem operations run in the pinned container and a runner secret is absent. The official MCP 1.14.0 binary's handshake, approved tool names and method enums were also inspected directly without making GitHub API writes. Its release archives are checksum-pinned.
+## Docker check
 
-Not validated by these tests: model-provider network behavior, a real GitHub App installation/review approval under organization policy, authenticated GCS transfer/permissions, or a consumer workflow running in GitHub Actions. Use the documented opt-in live CLI path with a disposable trusted PR and an existing bucket to validate those account-specific boundaries. No claim of a live model review, GitHub review write or cloud deployment is made.
+The default suite skips the real-container test. After building, opt in with a running Docker daemon on Linux or macOS:
+
+```sh
+SIFT_DOCKER_TEST=1 node --experimental-strip-types --test test/sandbox.test.ts
+```
+
+This checks Pi shell and filesystem operations in the pinned container, edits to runner-owned files, nested evidence, a writable temporary home, absence of a runner secret and Docker socket, and cleanup. The [CI workflow](../.github/workflows/test.yml) runs both `npm run check` and this Docker check. Pulling the configured image requires network access.
+
+## External-service validation
+
+These tests do not establish live model-provider behavior, GitHub App installation permissions or organization approval policy, authenticated GCS transfers, or successful execution of a consumer workflow in GitHub Actions. Action tests verify packaged metadata, input forwarding and outputs; they do not run a hosted workflow.
+
+Validate those boundaries with the [documented CLI setup](../README.md) against a disposable trusted PR and an existing bucket. Start with dry-run, which still uses configured model providers and persistence, then enable publication only when a live review is intended. A local test pass or dry-run result does not establish a live GitHub review write or deployment.

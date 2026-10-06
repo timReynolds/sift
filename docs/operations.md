@@ -1,46 +1,69 @@
 # Operations and recovery
 
-Use the [consumer workflow](../examples/review-workflow.yml) as one entry point for PR updates, review replies, mentioned conversation comments and manual dispatch. Actions concurrency is required across every Sift workflow for the same repository/PR. GitHub may replace pending queued runs; events are wake-ups, so each executed run fetches current code and all relevant unprocessed replies instead of trusting a single payload.
+The [example workflow](../examples/review-workflow.yml) handles PR updates, review replies, mentioned PR conversation comments, and manual dispatch. It checks out the default branch and passes its exact commit as the trusted configuration revision. Sift fetches the PR head independently.
 
-## Authentication and setup
+Use the same concurrency group in every workflow that runs Sift for a given repository and PR. The example sets `cancel-in-progress: false`. Each run fetches current revisions and unprocessed discussion, so it can catch up when GitHub replaces a pending run.
 
-The GitHub App needs repository Contents/Actions/Checks/Issues read and Pull requests write, and must be installed on the reviewed repository. Metadata read accompanies installation tokens. No webhook subscription, server, merge permission, contents write permission or infrastructure credential belongs to Sift. The workflow token is read-only and feeds model-facing MCP/source fetch; the App token feeds the operational host. For a shared private profile repository, supply a read token installed on both repositories; the default workflow token can only read its own private repository.
+## Runner and credentials
 
-The example uses [actions/create-github-app-token](https://github.com/actions/create-github-app-token/blob/fee1f7d63c2ff003460e3d139729b119787bc349/README.md) and [Google authentication through WIF](https://github.com/google-github-actions/auth/blob/7c6bc770dae815cd3e89ee6cdf493a5fab2cc093/README.md), pinned to commits. Create the bucket, service account and federation outside Sift. Grant object get/create/delete on that bucket; object replacement requires create and delete. Scope WIF trust to the intended repository and trusted workflow/ref. Google auth provides ADC to the GCS SDK. Never put service account key material in Sift YAML or SQLite.
+Use a Unix runner with Node 24, Git, tar, and Docker. The Action installs Node and builds Sift; the runner must already provide Docker. The default investigation image is pinned by digest. Each investigation container is limited to 2 CPUs, 4 GiB of memory, and 256 processes, so choose concurrency to fit the runner.
 
-Protect the default branch and workflow/configuration changes according to your repository's trust policy. v1 supports trusted internal branch PRs. Containers have network access and are not a hardened hostile-code service. Use an ephemeral runner; do not expose other privileged services or credentials through container networking. Private dependency credentials are deliberately absent from coding containers; provide a trusted dependency image/cache if required, or report that coverage gap.
+Sift supports trusted internal branch PRs on GitHub.com. External fork PRs are skipped. Investigation containers have network access and are unsuitable for executing hostile repositories. Use an ephemeral runner and avoid exposing privileged services through its network. Private dependency credentials are not passed into containers; use a trusted image or cache containing the required dependencies, or expect a reported coverage gap.
 
-The example gives the job 50 minutes, with a 30-minute default Sift timeout, leaving time to save state. Keep operational timeout below credential/runner lifetimes. There is no monetary budget. To review other languages, supply a digest-pinned container with Node 24 (for the Pi worker), Bash and relevant toolchains, or let investigators install public dependencies. No provisioning command is run by the host.
+Supply credentials through the runner environment:
 
-## Failure behavior
-
-| Symptom | Meaning and next step |
+| Credential | Use |
 | --- | --- |
-| Specialist failed / no structured findings | Coverage is incomplete. Retry the run or adjust the model, tools or investigation image. Approval is blocked. |
-| Model/reasoning unavailable | The pinned Pi catalogue or provider does not support that configuration. Choose a listed model/reasoning level; configure its environment credential. |
-| Stale review | Head or base changed during collection/publication. Rerun against fresh state. A detected late race is an operational failure even if GitHub accepted a review. |
-| APPROVE not confirmed | Check App installation permissions, repository approval settings and bot identity. Sift does not silently replace an unsupported approval with COMMENT. |
-| Inline comment rejected | The finding stays active and is reported in the review summary with a precise code link. |
-| Generation conflict | Another writer saved newer state. Preserve local diagnostics, fix duplicate concurrency entry points, then rerun from the latest snapshot. Never force an unconditional upload. |
-| Upload failed | Review publication may have succeeded, but persistence failed and the Action fails. Fix bucket/auth/network access, then rerun; GitHub markers reconcile already-published work. |
-| Required artifact missing | Sift discards the partially restored workspace and deliberately starts fresh investigation. It does not resume commands on assumed files. |
-| SQLite corrupt/unreadable | The object is preserved and no replacement is attempted. Follow the explicit recovery procedure below. |
-| Incompatible runtime version | Preserve the snapshot and migrate/inspect it with the pinned version before changing runtime versions. Do not reinterpret it as an empty session. |
+| `SIFT_GITHUB_READ_TOKEN` | Required read-only token for source fetch and model-facing GitHub tools |
+| `SIFT_GITHUB_WRITE_TOKEN` | Host-only review publication and reconciliation; `GITHUB_TOKEN` is a CLI fallback |
+| `SIFT_BOT_LOGIN` | Owner of Sift's reviews and comments; defaults to `github-actions[bot]` |
+| Provider environment variables | Model access for the configured provider |
+| Google Application Default Credentials | Required when `persistence.mode` is `gcs` |
 
-Cancellation via SIGTERM/SIGINT requests orderly abort and attempts a consistent save. A forced kill, abrupt runner loss or expired job can lose work since the last completed upload. Running shell processes and open MCP connections cannot be recovered from SQLite. Before artifact capture, containers are stopped to prevent a background process changing files during capture.
+Read and write tokens must differ. A GitHub App provides a stable publication identity; the example creates its installation token with Contents, Actions, Checks, and Issues read permissions and Pull requests write permission. Install the App on the reviewed repository. No webhook server is required. A private shared-profile repository also needs access through the read token; a workflow token generally cannot read another private repository.
 
-## Restoring state
+The example uses `SIFT_APP_ID`, `SIFT_APP_PRIVATE_KEY`, `SIFT_WIF_PROVIDER`, `SIFT_GCS_SERVICE_ACCOUNT`, and `ANTHROPIC_API_KEY` as repository variables or secrets. Protect the workflow, default branch, configuration, and profiles according to your repository's trust policy.
 
-Enable object versioning/retention on the bucket if your team wants rollback history; configure lifecycle/retention outside Sift. Stop concurrent runs before manual recovery. Preserve the suspect database and companion object generations for diagnosis. Restore a known-good `session.sqlite` generation using your normal storage tooling, then rerun. Do not copy a live WAL-backed main file by itself.
+## Persistence setup
 
-If no valid database exists, explicitly archive the bad object and remove the active key only after preserving it. A later run sees a missing state object and starts a new Pi session, while recovering all Sift feedback from GitHub markers and public finding metadata. Recovered findings require investigation and prevent a false clean approval. This loses unpublished conversations and reproductions; the bot's public feedback remains outstanding. Never remove the object automatically on parse/integrity errors.
+Local mode stores snapshots under `--state/objects` and is useful for local runs. State in an ephemeral Actions runner disappears after the job. For reviews that resume across jobs, configure GCS as shown in [configuration](configuration.md), create the bucket and authentication outside Sift, and grant object get/create/delete permissions on that bucket. Replacement uploads need both create and delete permission.
 
-Local mode mirrors the GCS key layout beneath `--state/objects`. Each run uses a fresh `run-*` directory. A local `.lock` beside a state object denotes a save in progress. After confirming no Sift process is active, an abandoned lock from a forced kill can be removed manually. Preserve failed run directories until diagnosis; successful/failed local workspaces may contain reviewed source and should be managed as private repository data. These scratch directories are not uploaded as generic workflow artifacts.
+The workflow example authenticates through Workload Identity Federation. Scope federation trust to the intended repository and trusted workflow/ref. The Google Storage SDK uses Application Default Credentials. Keep service account keys and other secret values out of configuration and state files.
 
-Artifacts are gzip JSON manifests bounded to 50 MiB of changed payload. Credentials (`.env*`, key files, credential directories), dependency trees and caches are excluded, and known credential values/private-key patterns in changed evidence cause capture to fail. Large unchanged repositories do not consume the changed-payload budget. Source exports read exact Git blobs and are bounded to 512 MiB per command. Submodules and Git LFS content are not automatically fetched; their absence creates a visible coverage gap. Raise these limits through a reviewed implementation change if the repository requires it; Sift reports limits rather than saving partial evidence.
+Keep Sift's timeout below the job and credential lifetimes so shutdown has time to save state. The example allows 50 minutes for the job; Sift defaults to 30 minutes. Cancellation through SIGTERM or SIGINT requests an orderly abort and save. A forced kill, runner loss, or job timeout can lose progress since the last completed upload.
 
-## Operational output
+## Failure handling
 
-The CLI emits JSON and a nonzero exit on operational failure. REQUEST_CHANGES is a code-review verdict, not a process failure. Action outputs and job summaries expose review revision, specialist outcomes, active findings, verdict, publication/persistence status and cumulative Pi usage. Dry-run outputs `publication-status: planned`; it never claims a review was submitted. GCS or artifact upload failure cannot be reported as successful persistence.
+The CLI exits nonzero for operational failures. `REQUEST_CHANGES` is a review verdict and can be a successful run. Publication and persistence are separate: GitHub may accept a review even if a later state upload fails.
 
-Live validation is optional: run the CLI first with `--dry-run` on a disposable trusted PR, inspect the plan, then invoke it without that flag only when you intend to publish. Use your own credentials and existing bucket. No live review, App installation or cloud resource provisioning is part of the default test suite.
+| Symptom | Next step |
+| --- | --- |
+| Specialist failed or omitted structured findings | Retry or adjust its model, tools, or image. The coverage gap prevents approval. |
+| Model or reasoning unavailable | Choose a model and level supported by the configured provider and Pi catalogue. |
+| Stale review | Rerun. Sift detects head/base changes around publication; a late race may fail after GitHub accepted the review. |
+| Approval not confirmed | Check publication identity, App permissions, and repository review settings. Sift fails rather than changing the verdict silently. |
+| Inline anchor rejected | Read the finding in the review summary; it stays active with a code link. |
+| Generation conflict | Stop duplicate writers, preserve diagnostics, and rerun from the latest snapshot. Do not overwrite newer state unconditionally. |
+| Upload failed | Repair bucket access, authentication, or networking, then rerun. GitHub markers reconcile prior publication. |
+| Required investigation artifact missing or invalid | Sift starts a fresh workspace and requires renewed investigation. |
+| SQLite corrupt or incompatible runtime | Preserve the snapshot and follow recovery below. Sift does not treat unreadable state as an empty session. |
+
+Action outputs and job summaries include the reviewed revision, verdict, specialist outcomes, active finding counts, coverage gaps, publication/persistence status, and cumulative Pi usage. A dry-run reports publication as `planned` and still saves state. It makes no GitHub mutations. Without a publication credential, private pending reviews cannot be reconciled and appear as a coverage gap.
+
+## Recovery
+
+Stop concurrent runs before manual recovery. Preserve the suspect database and companion artifacts. If available, restore a known-good `session.sqlite` object generation with your storage tools, then rerun. Enable object versioning and lifecycle policies outside Sift if you need rollback history. A live WAL-backed SQLite main file alone is not a complete backup.
+
+If no valid database exists, archive the bad object before removing its active key. The next run starts a new Pi session and imports Sift's published findings from GitHub markers. Recovered findings require investigation before approval. This loses unpublished conversation history and reproduction files, so preserve them first where possible. Sift never deletes corrupt state automatically.
+
+Saved databases with incompatible Pi or GitHub MCP versions require explicit migration or inspection with the matching version. Preserve them before upgrading dependencies.
+
+Local saves use a `.lock` directory beside each object. After confirming that no Sift process is running, remove an abandoned lock left by a forced kill. Run directories under `--state` contain reviewed source and evidence; retain them for diagnosis and then clean them up according to the repository's data policy. Sift does not upload them as generic workflow artifacts.
+
+## Investigation artifacts and limits
+
+Sift stops containers before capturing changed investigation files and saves those artifacts before the database that references them. Dependencies, caches, credential paths, and unchanged files are excluded. Known credential values and private-key patterns in changed evidence fail capture. These exclusions are not a general secret scanner; treat stored source, evidence, and model conversations as repository data.
+
+Artifacts are gzip-compressed JSON with a 50 MiB limit on changed file payload and on the uncompressed manifest, including base64 contents. Git export command output is limited to 512 MiB. Submodules and Git LFS content are not automatically fetched; missing content is reported as a coverage gap. Background processes and open MCP connections do not survive restoration.
+
+For validation commands and the boundaries covered by the test suite, see [testing](testing.md).

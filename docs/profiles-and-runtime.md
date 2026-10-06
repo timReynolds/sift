@@ -1,29 +1,75 @@
-# Profiles and the Pi runtime
+# Profiles and runtime
 
-Sift's starter profiles live in `.agents/sift`, the default directory for local and shared definitions. They are examples selected explicitly through configuration, not a mandatory panel. The lead receives the available specialists' names, descriptions, and optional globs. The model makes applicability decisions and records reasons through `plan_review`; no path classifier silently chooses the reviewers.
+Profiles describe the lead and specialists. Sift's [starter profiles](../.agents/sift) live in `.agents/sift`, the default directory for local and shared definitions. Configuration explicitly names the lead and available specialists. The lead selects or skips each specialist using its description and optional glob hints, recording a reason with `plan_review`.
 
-## Agent profile compatibility
+## Writing a profile
 
-Profiles use Markdown with YAML frontmatter. Sift supports `name`, required `description`, `model`, `tools`, and `mcp-servers`. Instructions must contain 1–30000 characters. `model` is a Pi `provider/model-id`, rather than a Copilot display name. A missing name uses the filename without `.agent.md`; an explicit name is a stable lower-case identifier. Unlike GitHub's filename-based precedence, Sift overrides by that stable name. Duplicate names at the same precedence level fail. Local profiles override the pinned shared source.
+Create a `*.agent.md` file with YAML frontmatter and Markdown instructions:
 
-`tools` accepts an array or comma-separated string. `read`, `edit`, `search`, and `execute` map to Pi's real coding tools, including common GitHub aliases. Search uses the shell, so selecting search also grants command execution in the isolated investigator container. Omitted tools grant coding tools. `*` in a profile selects host-approved tools only; it cannot approve an MCP server or bypass host policy. Empty tools disable coding tools; Sift's structured review protocol tools remain available. Unrecognized names do not grant capabilities.
+```markdown
+---
+name: correctness
+description: Find behavioral regressions introduced by the PR.
+tools: [read, search, execute]
+sift:
+  reasoning: high
+  globs: ["src/**"]
+---
+Trace changed behavior and its callers. Report concrete defects with code or test evidence.
+```
 
-`sift.reasoning` and `sift.globs` are Sift additions. Globs are applicability hints, never mandatory routing rules. Repository `agents.<name>` overrides the profile's model, reasoning, and tools. `target`, `metadata`, `disable-model-invocation`, `user-invocable`, and legacy `infer` are accepted for file compatibility but do not alter Sift's explicit configured catalogue. Other frontmatter fields fail validation.
+`description` is required. Instructions must contain 1–30000 characters after trimming. `name` defaults to the filename without `.agent.md`; names use lowercase letters, digits, underscores, and hyphens, start with a letter, and are at most 64 characters.
 
-Profile MCP `local` maps to `stdio`; HTTPS `http` is also supported. Credentials must use `$ENV_NAME`, `${ENV_NAME}`, `${{ secrets.ENV_NAME }}`, or `${{ vars.ENV_NAME }}` references. Literal values and default-value interpolation are rejected. Each server requires explicit tool names. Root and nested AGENTS.md files provide directory-scoped instructions, never executable MCP or model configuration. Symlinks cannot import guidance from outside the checkout.
+| Field | Behavior |
+| --- | --- |
+| `name` | Stable identity used by configuration and state |
+| `description` | Applicability guidance for the lead |
+| `model` | Optional Pi `provider/model-id` |
+| `tools` | Optional array or comma-separated string of coding tool names |
+| `sift.reasoning` | Optional reasoning level |
+| `sift.globs` | Optional applicability hints |
+| `mcp-servers` | Optional read-only MCP definitions |
 
-## Ownership and recovery
+Model and reasoning resolve in this order: repository `agents.<name>` override, profile setting, then repository default. Tools use the per-agent override, then the profile setting, then the fixed default `[read, edit, search, execute]`. Duplicate names at one source level fail; local profiles override shared profiles by stable name. Unselected files are not activated. See [configuration](configuration.md) for source selection and overrides.
 
-`investigate` is a sequential Pi tool round containing a bounded batch of concurrent specialist conversations. Pi owns each specialist under the tool task, propagates cancellation, tracks completion, and recovers submissions with stable request IDs. Sift does not maintain a second conversation scheduler. Follow-ups fork the specialist's history into a newly task-owned conversation, preserving context while giving cancellation a current owner. Failed or unstructured specialist output is explicitly incomplete coverage, retained across pushes. It can be cleared by successfully retrying that investigator or by recording concrete replacement coverage from another completed specialist.
+For compatibility with agent profile files, Sift also accepts `target` (`vscode` or `github-copilot`), `metadata`, `disable-model-invocation`, `user-invocable`, and `infer`. These fields do not change Sift's configured specialist selection. Other frontmatter fields are rejected.
 
-Pi documents hold review scope, selections, findings, publication state, imported-message IDs, investigation reports, workspace identity, and selected capabilities. Pi's own documents retain model settings, instructions, tasks, provider session identity, usage, and compaction. The host reconstructs implementations and execution environments before resuming. A capability activation can select only a declared capability approved for that profile. Its tools enter the next prepared model request; the selected names survive SQLite restart.
+## Coding tools
 
-## Investigation isolation
+| Profile names | Pi tools granted |
+| --- | --- |
+| `read`, `notebookread` | `read` |
+| `edit`, `multiedit`, `notebookedit` | `edit`, `write` |
+| `write` | `write` |
+| `search`, `grep`, `glob`, `execute`, `shell`, `bash`, `powershell` | `bash` |
+| `*` | All four coding tools above |
 
-All Pi filesystem and shell operations run in an investigator container, including absolute paths and symlink targets. Each workspace gets a separate checkout and container. Only that workspace is mounted writable. Sift's worker and dependency directory are mounted read-only. No Docker socket, runner home, model credentials, GitHub token, GCS credentials, or cloud deployment credentials are mounted or passed into the container. The default Node 24 image is pinned by digest; trusted configuration can supply another image with Node 24, Bash, and the investigation dependencies needed by the repository.
+Names are case-insensitive. Search grants shell execution in the investigation container. An empty tool list disables coding tools; unknown names grant nothing. Structured review protocol tools remain available. `*` does not authorize extra MCP tools or expand host permissions.
 
-The readable worker source is `runtime/sandbox-worker.mts`. `npm run build` compiles it to `dist/runtime/sandbox-worker.mjs`, which the host mounts into the container. Containers run with the Unix runner's UID and GID so investigators can edit runner-owned files and the host can remove their output. Their fixed `HOME=/tmp` supports tool caches without exposing the runner's home directory. GitHub-hosted Ubuntu runners provide the Docker engine needed by this path.
+Root and nested `AGENTS.md` files supply directory-scoped repository instructions. They do not configure models or MCP servers. Deeper guidance applies only within its directory, and guidance symlinks cannot point outside the checkout.
 
-Containers retain normal network access for dependency installation and investigation. They are not a security boundary for hostile repositories; v1 supports trusted internal PRs. Commands have a host-enforced timeout. Cancellation stops the container, since terminating the Docker client alone would not reliably terminate its child commands. Background processes do not survive restoration. Investigation files are preserved separately from Pi's database by the snapshot persistence layer.
+## Profile MCP servers
 
-The default tests use real Pi/SQLite and explicitly injected temporary local test environments. Run `npm run build` before the additional real Docker boundary test, then `SIFT_DOCKER_TEST=1 SIFT_TEST_SECRET=must-not-leak npm test`. No live model or cloud credentials are required.
+Profile `mcp-servers` use the same explicit tools and optional method allowlists as repository MCP settings. `type: local` is accepted as an alias for `stdio`; `http` requires an HTTPS URL. Model-facing tools must advertise `readOnlyHint: true`.
+
+Credentials in profile `env` and `headers` must be references such as `$ENV_NAME`, `${ENV_NAME}`, `${{ secrets.ENV_NAME }}`, or `${{ vars.ENV_NAME }}`. Literal credentials and interpolation defaults are rejected. These references are resolved from the runner environment; they do not fetch GitHub secrets automatically. Profile definitions override repository definitions of the same name for that profile. The reserved `github` capability cannot be replaced.
+
+An agent activates an approved MCP capability with `enable_capability`; its tools enter the next model request. Selected capability names are persisted and reconstructed when a session resumes.
+
+## Conversations and recovery
+
+Pi Durable owns conversations, tool tasks, cancellation, submissions, compaction, and usage. `investigate` runs a bounded batch of selected specialists concurrently. Follow-ups fork the previous specialist conversation into a new task-owned conversation with its history. Stable submission request IDs support recovery.
+
+Sift keeps review scope, specialist selections, findings, imported-message IDs, publication receipts, coverage, and workspace references in Pi documents. Implementations, execution environments, and MCP connections are rebuilt before resuming a saved session. A changed head, base, or trusted configuration requires fresh coverage while retaining findings and discussion.
+
+A failed specialist or missing structured report creates incomplete coverage. That failure remains visible across pushes and cannot be cleared simply by skipping the specialist. A successful retry or recorded replacement coverage from another completed specialist can clear it.
+
+## Investigation containers
+
+Each investigator, including a lead using coding tools, gets a separate copy of the exact PR head and a Docker container. The checkout has no `.git` administration directory. All Pi filesystem and shell operations run through the container, including absolute paths and symlink targets.
+
+Only the investigator's workspace is mounted writable. The compiled [sandbox worker](../runtime/sandbox-worker.mts) and Sift dependencies are mounted read-only. Containers use the runner's Unix UID/GID, `HOME=/tmp`, and a digest-pinned Node 24 image. The runner home, Docker socket, model credentials, GitHub tokens, and Google credentials are not mounted or passed into the container.
+
+Containers retain network access for investigation and public dependency installation. Sift supports trusted repositories and internal PRs; this setup is not a hardened service for hostile code. Commands have a configured timeout, and cancellation stops the container. Temporary edits and reproductions can be restored from companion artifacts; running processes and excluded dependency caches must be recreated.
+
+See [operations](operations.md) for runner requirements and artifact limits, and [testing](testing.md) for the optional Docker check.

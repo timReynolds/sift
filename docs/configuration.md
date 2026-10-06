@@ -1,31 +1,88 @@
-# Sift configuration
+# Configuration
 
-Sift reads YAML with `version: 1`. Unknown keys, duplicate YAML keys, invalid paths, and unpinned shared profile references are errors. Start with [examples/sift.yml](../examples/sift.yml). The configuration is execution authority: load it from a trusted commit or an explicitly supplied runner file, never from the proposed PR head. The host records the trusted revision and a canonical configuration hash in Pi state.
+Sift reads a YAML file with `version: 1`. Start with [examples/sift.yml](../examples/sift.yml) and save it as `.sift.yml` in the repository being reviewed.
 
-`model` uses `provider/model-id` from Pi's model catalogue. `reasoning` accepts `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`. The selected provider/model must support the requested level. `agents.<name>` can override `model`, `reasoning`, and `tools` per agent. The lead is named separately; `profiles` explicitly lists the available specialists. An unrelated profile on disk is never implicitly activated. `name` and `mention` control the display name and general PR comment trigger; internal state markers remain stable across display-name changes.
+The CLI and Action load configuration and profiles from the exact commit supplied through `--trusted-ref` or the Action's `trusted-ref` input. Use a reviewed commit on a protected branch. Configuration from the PR head must not authorize its own review. The CLI also supports `--runner-config` for an explicitly trusted configuration file on the runner; profiles still come from the trusted revision.
 
-`sources.local` lists directories relative to the trusted checkout. An optional `sources.shared` specifies `repository: owner/repo`, a full 40-character commit SHA in `ref`, and a relative `path`. Local profiles override shared profiles by stable name. Only the configured lead and available specialists are loaded for execution.
+After building Sift, validate the YAML without credentials or network access:
 
-## Policy
+```sh
+node dist/src/cli.js --config examples/sift.yml --validate-config
+```
+
+This checks the configuration schema. Profile loading, model availability, credentials, and MCP tool compatibility are checked when a review starts. Unknown keys, duplicate YAML keys, invalid repository-relative paths, and mutable shared-profile references are rejected.
+
+## Models and profiles
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `version` | Required: `1` | Configuration format |
+| `model` | Required | Pi model ID in `provider/model-id` form |
+| `reasoning` | `high` | `off`, `minimal`, `low`, `medium`, `high`, or `xhigh` |
+| `name` | `Sift` | Configuration label; does not change bot identity or published review text |
+| `mention` | `sift` | PR conversation trigger, such as `@sift` |
+| `lead` | `lead` | Stable name of the lead profile |
+| `profiles` | Required, nonempty | Available specialist profile names |
+| `sources.local` | `[.agents/sift]` | Profile directories in the trusted checkout |
+| `sources.shared` | Unset | Optional pinned shared profile repository |
+| `agents.<name>` | `{}` | Per-agent `model`, `reasoning`, and `tools` overrides |
+
+Supported providers are `anthropic`, `openai`, `google`, and `openrouter`. The runner refreshes Pi's model catalogue and rejects unknown models or unsupported reasoning levels. Supply the selected provider's credentials in the runner environment.
+
+The lead cannot appear in `profiles`, specialist names must be unique, and overrides must name the lead or an available specialist. The lead chooses which specialists to run; a profile on disk is not automatically enabled. See [profiles and runtime](profiles-and-runtime.md) for frontmatter, tools, and precedence.
+
+Shared profiles require `repository: owner/repo` and a full 40-character commit SHA in `ref`. `path` defaults to `.agents/sift`. Local profiles override shared profiles by stable name. The read token must be able to fetch both repositories.
+
+## Review policy
 
 | Priority | Meaning |
 | --- | --- |
-| P0 | Urgent: demonstrated critical breakage requiring immediate attention |
-| P1 | High: a demonstrated issue that should block merging |
-| P2 | Normal: a concrete actionable defect that usually does not block |
-| P3 | Low: a real low-impact defect; style nits remain excluded |
+| P0 | Urgent: critical breakage requiring immediate attention |
+| P1 | High: an issue that should block merging |
+| P2 | Normal: an actionable defect that usually does not block |
+| P3 | Low: a low-impact defect; style nits are excluded |
 
-Priority is impact, not certainty. Findings separately record `unsupported`, `plausible`, or `verified` confidence and concrete evidence. Publication and blocking thresholds are independent. `publishThrough` defaults to P2; `blockThrough` defaults to P1. `mode: advisory` prevents REQUEST_CHANGES. Incomplete coverage prevents APPROVE. Comment limits must leave deferred issues visible in the review summary. `drafts` is `skip` by default or `review`.
+Priority describes impact. Confidence is recorded separately as `unsupported`, `plausible`, or `verified`; unsupported findings are rejected.
 
-## Runtime and persistence
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `policy.mode` | `enforcing` | `advisory` prevents `REQUEST_CHANGES` |
+| `policy.publishThrough` | `P2` | Highest numeric priority included in inline findings |
+| `policy.blockThrough` | `P1` | Threshold for verified findings to request changes |
+| `policy.maxInlineComments` | `30` | Positive limit on inline findings in a review plan |
+| `policy.drafts` | `skip` | Set to `review` to include draft PRs |
 
-`execution.concurrency` limits active specialists. Overall, command, and model timeouts are expressed in seconds. These are operational limits; no monetary cap is imposed. An optional `containerImage` must include an immutable `@sha256:` digest.
+Thresholds include all more urgent priorities: `P2` includes P0, P1, and P2. Publication and blocking thresholds are independent. Active findings or incomplete coverage produce `COMMENT` unless verified blockers require `REQUEST_CHANGES`. `APPROVE` requires complete coverage and no active findings. Findings deferred by the inline limit remain visible in the summary.
 
-`persistence.mode` is `local` or `gcs`. GCS additionally requires a `bucket`; its `prefix` defaults to `sift`. State uses the stable numeric repository ID and PR number, independent of branch revisions and repository renames. Secrets are not configuration values.
+## Execution and persistence
 
-## MCP definitions
+| Setting | Default | Accepted values |
+| --- | --- | --- |
+| `execution.concurrency` | `4` | 1–32 specialists per investigation batch |
+| `execution.timeoutSeconds` | `1800` | 1–21600 seconds for a review run |
+| `execution.commandTimeoutSeconds` | `300` | 1–1800 seconds per investigation command |
+| `execution.modelTimeoutSeconds` | `180` | 1–1800 seconds for Pi's model stream timeout |
+| `execution.containerImage` | Pinned Node 24 image | Image reference ending in `@sha256:` and a 64-character digest |
+| `persistence.mode` | `local` | `local` or `gcs` |
+| `persistence.bucket` | Required for `gcs` | Existing GCS bucket name |
+| `persistence.prefix` | `sift` for `gcs` | Repository-relative object prefix |
 
-Each entry of `mcp` explicitly declares a server and tool names. Wildcards are rejected at this host permission boundary. Optional `methods` restricts method-based tools further.
+Timeouts do not impose a spending cap. Custom investigation images need Node 24, Bash, and the toolchains required by the reviewed repository. See [operations](operations.md) for runner requirements and recovery.
+
+Local snapshots are stored beneath `--state/objects`; ephemeral runners need GCS to retain state between jobs:
+
+```yaml
+persistence:
+  mode: gcs
+  bucket: your-sift-state-bucket
+  prefix: sift
+```
+
+State is keyed by numeric repository ID and PR number, so pushes and repository renames retain the same session. The host also records the trusted revision and configuration hash.
+
+## MCP servers
+
+`mcp` declares additional model-facing servers. Every server needs explicit `tools`; wildcard names are rejected. A tool with a `method` parameter also needs a `methods` allowlist. Tools must advertise `readOnlyHint: true` to be exposed to models.
 
 ```yaml
 mcp:
@@ -44,4 +101,6 @@ mcp:
     tools: [lookup]
 ```
 
-The `env` and `headers` values above are runner environment-variable **names**. The host resolves them immediately before connecting; the resolved values must never be written into Pi state. HTTP endpoints require HTTPS without embedded credentials, query strings, or fragments. Keep write credentials out of investigator containers and read-only MCP connections. Arbitrary PR messages cannot add tools or change these settings.
+`env` and `headers` values are runner environment-variable **names**, not secret values. In this example, `KNOWLEDGE_AUTH_HEADER` contains the complete header value, including any `Bearer ` prefix. Missing variables fail connection. HTTP URLs require HTTPS and cannot contain embedded credentials, query strings, or fragments.
+
+Profile MCP definitions override configuration definitions with the same name for that profile. The built-in `github` capability cannot be replaced. Keep additional server credentials read-only; the runner rejects the operational GitHub write token on model-facing connections. Servers run on or connect from the host, and their approved tools become available when an agent enables the capability.

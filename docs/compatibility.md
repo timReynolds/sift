@@ -1,37 +1,44 @@
-# Upstream compatibility
+# Compatibility
 
-The lockfile pins the installed dependency graph. Direct dependencies use exact versions. Runtime compatibility is recorded in application state so an incompatible resume can fail visibly.
+Sift uses exact direct dependency versions and a committed [lockfile](../package-lock.json). Install with `npm ci --ignore-scripts` and run the checks before updating dependencies. The supported development Node major is recorded in [.node-version](../.node-version).
 
-| Component | Pin | Verified source |
+| Component | Current pin | Source of truth |
 | --- | --- | --- |
-| Pi Durable, Pi AI, Chord | 1.0.2 | npm package exports and declarations; upstream commit `cd32f7725fdbddbaecdff5b1e68491563394e0ca` |
-| Official GitHub MCP server | 1.14.0 | release source at `v1.14.0` |
-| MCP TypeScript SDK | 1.32.0 | installed package |
-| Octokit REST client and endpoint types | 22.0.1 | [official package exports](https://github.com/octokit/rest.js/blob/v22.0.1/src/index.ts) |
-| Google Cloud Storage SDK | 8.2.0 | installed package |
-| Node | 24 LTS | Pi requires at least 22.19; Sift uses Node's built-in SQLite |
+| Node | 24 | [.node-version](../.node-version) and [package.json](../package.json) |
+| Pi Durable, Pi AI, Chord | 1.0.2 | [package.json](../package.json) |
+| Official GitHub MCP server | 1.14.0 | [runtime compatibility](../src/contracts.ts) and [release installer](../src/mcp-binary.ts) |
+| MCP TypeScript SDK | 1.32.0 | [package.json](../package.json) |
+| Octokit REST | 22.0.1 | [package.json](../package.json) |
+| Google Cloud Storage SDK | 8.2.0 | [package.json](../package.json) |
 
-Pi is experimental; this implementation does not assume that a later release has the same API. The installed 1.0.2 exports include `Harness`, `configure`, `createRegistry`, `defineExtension`, `defineTool`, `defineTask`, `defineDoc`, `CodingTools`, and `openNodeSqliteStorage`. No custom conversation scheduler or Pi storage engine is needed.
+After building, print the runtime and state format versions with:
 
-The [pinned Pi README](https://github.com/earendil-works/pi/blob/cd32f7725fdbddbaecdff5b1e68491563394e0ca/packages/durable/README.md) and examples 22–24 and 28–31 document the mechanisms used here:
+```sh
+node dist/src/cli.js --version
+```
 
-* A foreground subagent conversation belongs to its tool task. Pi propagates cancellation and uses the ownership index to recover it after restart.
-* Background agents use durable anchor and reporter tasks; child tasks can wait with `allSettled` or `failFast`.
-* A submission's `requestId` deduplicates replayed input.
-* Conversation configuration stores names and model choices; implementations and MCP connections must be rebuilt in each process.
-* Changes to the offered tools apply to the next prepared model request. A call already running retains its implementation.
-* SQLite uses WAL. Close/checkpoint or backup must produce a standalone file before uploading.
+## Runner support
 
-The [pinned GitHub MCP README](https://github.com/github/github-mcp-server/blob/v1.14.0/README.md) documents `pull_request_read` methods for PR metadata, diff, files, commits, review threads, reviews, conversation comments, statuses, and check runs. Review thread pagination uses `after`; list methods use `page` and `perPage`. `pull_request_review_write` includes `create`, `submit_pending`, `delete_pending`, `resolve_thread`, and `unresolve_thread`. Inline pending comments use `pullNumber`, `subjectType`, `line`, `side`, and optional `startLine`/`startSide`. Resolution takes the GraphQL thread node ID; replies take a numeric review comment ID. Sift must retain that distinction.
+The GitHub MCP installer supports Linux and macOS on x64 and arm64. It downloads the pinned release and checks its archive SHA-256. `--github-mcp PATH` accepts a preinstalled server; the server must still report the pinned version.
 
-The [GitHub profile format](https://docs.github.com/en/copilot/reference/custom-agents-configuration) is the source format for `*.agent.md` files. Sift stores its reusable definitions in `.agents/sift` by default. Sift documents its supported subset and permission differences with the profile loader; AGENTS.md remains scoped repository guidance rather than a model or MCP configuration file.
+Investigation containers require a Unix runner with Docker, Node 24 on the host, and a custom image with Node 24 and Bash if replacing the default. Windows investigation runners are unsupported. The [example Action workflow](../examples/review-workflow.yml) targets Ubuntu.
 
-The operational adapter uses native MCP writes for pending reviews, inline comments, replies, submission and owned-thread resolution. Its allowlist is explicit (14 tools). `get_job_logs` is forced to return content, not a signed download URL. The model-facing connection is read-only; the publication connection is host-only. Unsupported method/tool schemas fail during connection, and server version must equal the pin.
+GitHub.com is supported. GitHub Enterprise host configuration is not exposed. Open internal branch PRs are supported; external forks are skipped. Submodules and Git LFS objects are not automatically restored.
 
-The pinned server omits numeric IDs in review-thread comments and limits each thread to its first 100 comments. Narrow GitHub REST reads supplement all inline comment pages, pending review comment pages, exact repository/head/base metadata, merge-base comparison and collaborator permissions. They do not form a second general GitHub tool surface. Other writes use the official server; no thread-resolution feature is omitted. Public GitHub.com is supported in v1; enterprise host configuration is not yet exposed.
+## Runtime upgrades
 
-Those REST reads use `@octokit/rest` endpoint methods and its exported `RestEndpointMethodTypes`. Sift derives file, comment and review fields from these types, then keeps only its normalized review context. Runtime schemas still validate external data, repository identity and SHAs. A bounded page loop retains cancellation and rejects incomplete reads because the [pinned SDK paginator](https://github.com/octokit/plugin-paginate-rest.js/blob/v14.0.0/src/iterator.ts) treats HTTP 409 as an empty page and does not forward per-call request options. Only HTTP 5xx reads retry, at most twice; redirects remain rejected.
+Pi Durable owns the SQLite storage, conversations, tasks, and recovery. Sift stores Pi and GitHub MCP versions with the session and refuses to resume incompatible snapshots. Preserve saved state before upgrading; migration is explicit, and no automatic migration command is provided.
 
-The MCP adapter returns the SDK's `CallToolResult` type, and `CallToolResultSchema` validates receipts, including content variants and error flags. Advertised method enums are checked with Zod before applying Sift's allowlist. The SDK's stdio transport discards server stderr through its native `ignore` option so credentials cannot enter transcripts or persisted diagnostics. Existing Zod transforms validate and normalize GitHub comments together; reviews are validated once and converted through a named mapper.
+The host reconstructs tool implementations and connections before recovery. Persisted capability selections cannot activate tools absent from the new trusted configuration. Configuration identity includes the trusted revision, so a changed configuration or profile revision requires renewed coverage.
 
-No live model review, GitHub review write, or authenticated GCS upload has been validated by the default tests. They exercise the real Pi harness and SQLite with deterministic provider responses; the optional Docker test uses real containers. See [the acceptance map](testing.md).
+## GitHub adapter
+
+The [MCP adapter](../src/mcp.ts) uses explicit tool and method allowlists, checks advertised schemas, and scopes calls to the reviewed repository and PR. Model-facing tools use a separate read-only connection. Native MCP operations publish reviews, inline comments, replies, and thread resolution; write credentials stay on the host.
+
+The [read adapter](../src/github.ts) supplements MCP with narrow REST reads for exact revisions, merge-base comparison, collaborator permissions, and full comment pagination. It distinguishes numeric review-comment IDs from GraphQL thread IDs. Bounded pagination rejects incomplete reads; transient HTTP 5xx reads retry at most twice, while redirects are rejected.
+
+Profile files use a supported subset of Markdown agent frontmatter. See [profiles and runtime](profiles-and-runtime.md) for accepted fields, coding aliases, and permission differences.
+
+## Validation boundaries
+
+The default tests exercise real Pi Durable and SQLite with deterministic model responses and simulated GitHub/cloud boundaries. A separate opt-in Docker test checks the real container boundary. Live provider calls, GitHub publication, and authenticated GCS transfers require separate validation. See [testing](testing.md).

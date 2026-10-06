@@ -1,33 +1,62 @@
 # Sift
 
-Review the implementation in [stack order](docs/review-stack.md), with each PR's scope, size and validation recorded.
+Durable, multi-agent code review for GitHub pull requests.
 
-Sift reviews trusted, internal GitHub pull requests with a lead coding agent and configurable specialists. Pi Durable owns their conversations, tasks, recovery, compaction and usage. Each investigator gets an isolated coding workspace. The host validates and publishes findings as native GitHub reviews, imports human replies, and rechecks earlier feedback across pushes.
+Sift pairs a lead reviewer with specialists for correctness, security, tests, and infrastructure. Each reviewer can inspect code and run reproductions in an isolated Docker workspace. The lead challenges the evidence, merges duplicate findings, and publishes a native GitHub review.
 
-The implementation runs in GitHub Actions or through the same local CLI. It uses local SQLite during a run and guarded GCS snapshots between runs. It never commits or pushes investigated code, merges PRs, or provisions infrastructure.
+Reviews continue across pushes and human replies. Sift remembers outstanding findings, rechecks them against the latest code, and resolves its own threads when the evidence supports it. [Pi Durable](https://github.com/earendil-works/pi) manages agent conversations, tasks, and recovery; SQLite snapshots preserve each PR's state between runs.
 
-## Install in a repository
+Sift runs as a GitHub Action or local CLI. It currently supports trusted repositories and PRs from branches in the same repository. External fork PRs are skipped. Investigators can make temporary local edits, but Sift does not commit or push changes, merge PRs, or apply infrastructure.
 
-1. Copy [examples/sift.yml](examples/sift.yml) to `.sift.yml`, and copy the selected [starter profiles](.agents/sift) to `.agents/sift`. Change the model and available specialist names as needed. Set `persistence.mode: gcs` and your existing bucket name.
-2. Install a GitHub App with repository **Contents, Actions, Checks and Issues: read**, and **Pull requests: write**. Add its ID as `SIFT_APP_ID` and private key as `SIFT_APP_PRIVATE_KEY`. No App server or webhook receiver is needed. The token action creates a short-lived installation token.
-3. Configure Google Workload Identity Federation and an existing bucket. Set `SIFT_WIF_PROVIDER` and `SIFT_GCS_SERVICE_ACCOUNT` repository variables. The service account needs bucket object read/create/delete permissions to read snapshots and replace them with generation guards. Restrict the federation trust to this repository and approved workflow/ref. Sift does not create these resources.
-4. Add the chosen provider's credential, for example `ANTHROPIC_API_KEY`, as a repository secret.
-5. Copy [examples/review-workflow.yml](examples/review-workflow.yml) to `.github/workflows/sift.yml`. Replace `REPLACE_WITH_REVIEWED_COMMIT_SHA` with a reviewed Sift commit. Keep the same per-PR concurrency group across every entry point and `cancel-in-progress: false`.
+## Set up GitHub Actions
 
-The workflow checks out the protected default branch only to identify trusted configuration. Sift fetches the PR's exact head, base and merge base independently. This also handles stacked PRs targeting a non-default branch. Proposed configuration/profile changes cannot expand permissions during their own review. External forks are skipped; drafts are skipped unless configured otherwise.
+Use a Linux runner with Docker, Git, tar, and Node 24. The example workflow uses `ubuntu-latest`; the composite Action installs Node and builds Sift from its lockfile.
 
-Use a Linux runner with Docker, Git, tar and Node 24 LTS. The composite Action installs its own locked dependencies and builds its own source, then calls the CLI engine. It does not run the reviewed repository's install scripts on the credential-bearing host. Investigator containers can install dependencies and run reproductions with no runner credentials or Docker socket.
+1. Copy [examples/sift.yml](examples/sift.yml) to `.sift.yml` in the repository you want reviewed. Copy the [starter profiles](.agents/sift) to `.agents/sift`, and choose the model and specialists you want to use.
+2. Create and install a GitHub App with repository **Contents, Actions, Checks, and Issues: read**, and **Pull requests: write**. Set the repository variable `SIFT_APP_ID` and secret `SIFT_APP_PRIVATE_KEY`. The workflow creates a short-lived installation token; no App server is needed.
+3. Create a GCS bucket, service account, and Workload Identity Federation configuration. Set the repository variables `SIFT_WIF_PROVIDER` and `SIFT_GCS_SERVICE_ACCOUNT`. Grant the service account object read/create/delete permissions on the bucket and restrict federation trust to the intended repository and trusted workflow/ref. See [operations](docs/operations.md) for state and access details.
+4. Change the example's local persistence to GCS so state survives between workflow runs:
 
-## Local CLI
+   ```yaml
+   persistence:
+     mode: gcs
+     bucket: YOUR_BUCKET_NAME
+     prefix: sift
+   ```
+
+5. Add the model provider's credential as a repository secret. The example uses `ANTHROPIC_API_KEY`; update the workflow environment if you choose another provider.
+6. Copy [examples/review-workflow.yml](examples/review-workflow.yml) to `.github/workflows/sift.yml`. Replace `REPLACE_WITH_REVIEWED_COMMIT_SHA` with the full SHA of a Sift commit you have reviewed. Keep its per-PR concurrency group consistent across every workflow that runs Sift, with `cancel-in-progress: false`.
+7. Commit the configuration, profiles, and workflow to your protected default branch before running a review.
+
+The workflow loads configuration from that trusted branch. Sift independently fetches the PR's exact head, base, and merge base, including PRs targeting another branch. Proposed configuration or profile changes take effect after they reach the trusted ref.
+
+Reviewed repository code runs inside investigator containers. Those containers receive neither runner credentials nor the Docker socket. Model providers receive review context, and stored sessions contain conversations and evidence; choose providers and bucket access appropriate for your repository's data.
+
+## Run locally
+
+Build from source with Node 24:
 
 ```sh
+git clone https://github.com/timReynolds/sift.git
+cd sift
 npm ci --ignore-scripts
 npm run build
 node dist/src/cli.js --help
 node dist/src/cli.js --validate-config --config examples/sift.yml
 ```
 
-For a real review, configure `SIFT_GITHUB_READ_TOKEN`, a separate `SIFT_GITHUB_WRITE_TOKEN`, `SIFT_BOT_LOGIN`, and provider credentials in your runner environment. Use ADC for GCS mode. The read token must have only read permissions. The write token remains in the operational host; model-facing MCP uses the separate read token. `GITHUB_TOKEN` is a fallback for the write token. Without an App, configure workflow/PAT credentials and identity consistently; GitHub may disallow a workflow token from approving a PR under repository policy.
+Configuration validation checks the YAML schema. Profile loading, model availability, and credentials are checked when a review starts.
+
+For a review, first add `.sift.yml` and the selected profiles to the reviewed repository's trusted branch. Supply these environment variables through your credential manager or shell:
+
+| Variable | Purpose |
+| --- | --- |
+| `SIFT_GITHUB_READ_TOKEN` | Read-only GitHub token for fetching source and model-facing MCP reads. |
+| `SIFT_GITHUB_WRITE_TOKEN` | Separate token for host-only review publication; `GITHUB_TOKEN` is a fallback. |
+| `SIFT_BOT_LOGIN` | Login owning the reviews, such as `YOUR_APP_SLUG[bot]`. |
+| Provider credential | Credential for the configured model, such as `ANTHROPIC_API_KEY`. |
+
+GCS mode also requires Application Default Credentials. Local persistence needs no cloud account and retains snapshots under the state directory.
 
 ```sh
 node dist/src/cli.js \
@@ -36,33 +65,32 @@ node dist/src/cli.js \
   --config .sift.yml --state .sift/state --dry-run
 ```
 
-By default `--config` is a path in the fetched trusted commit. `--runner-config` explicitly opts into a configuration file supplied by the runner; profiles still come from the trusted checkout. `--github-mcp PATH` uses a preinstalled server whose handshake must report 1.14.0. Otherwise Sift downloads the pinned official release and checks its hard-coded SHA-256 checksum. The CLI supports `--event PATH --event-name NAME` or the corresponding Actions environment. Event SHAs are never used as the investigated head.
+Dry-run executes investigators and saves state without GitHub mutations. It can omit the write token; without it, private pending reviews cannot be reconciled and coverage is reported as incomplete. Remove `--dry-run` to publish. The read and write tokens must be different, and repository policy may prevent workflow tokens from approving PRs.
 
-Dry-run still runs investigators and saves state, but performs no GitHub mutations. It can omit the publication credential; in that case private pending reviews cannot be inspected and the plan reports incomplete coverage. With the publication credential, dry-run can fully reconcile pending reviews through host-only reads.
+By default, `--config` refers to a file in the fetched trusted commit. `--runner-config` opts into a runner-supplied configuration file; profiles still come from the trusted checkout. `--github-mcp PATH` uses a preinstalled server matching the pinned version. Otherwise Sift downloads and checksum-verifies the pinned GitHub MCP release.
 
-## Findings and outcomes
+## Review behavior
 
-The lead selects relevant specialists from descriptions, records reasons for skipped profiles, challenges findings, merges underlying duplicates and removes unsupported claims and nits. Priorities and confidence are separate. Defaults request changes for verified P0/P1 findings, comment on non-blocking findings or incomplete coverage, and approve only with complete relevant coverage and no active findings. Advisory mode never requests changes. See [configuration](docs/configuration.md) for thresholds.
+The lead chooses specialists from their descriptions and records why each is selected or skipped. Defaults publish findings through P2, request changes for verified P0/P1 findings, and approve only with complete coverage and no active findings. Non-blocking findings or incomplete coverage produce a comment review. Advisory mode never requests changes.
 
-Earlier comments remain tracked until rechecked. The host checks current-code evidence before accepting fixed/disproven/dismissed status, resolves only Sift-owned threads, and publishes the refreshed verdict separately. Maintainer dismissals retain their source and reason. Human discussion is imported by stable source/version IDs and responses have stable markers to prevent duplicate answers. Ordinary PR conversation comments need `@sift` or `/sift`; replies in Sift-owned review threads are relevant without a mention. Bot messages and reactions do not trigger discussion work.
+Mention `@sift` or `/sift` in an ordinary PR conversation to request follow-up. Human replies in Sift-owned review threads are imported without a mention. Bot messages and reactions do not trigger discussion work.
 
-Action outputs include the reviewed revision, selected/skipped/failed specialists, active findings by priority, verdict, publication and persistence status, coverage gaps, and measured cumulative session usage. A REQUEST_CHANGES review is a successful operation. An unsupported approval, missing publication receipt, or failed upload is an operational failure and exits nonzero.
+Action outputs report the reviewed revision, verdict, specialist decisions, findings, coverage gaps, publication, persistence, and measured usage. `REQUEST_CHANGES` is a successful review operation. Publication or persistence failures exit nonzero. See [action.yml](action.yml) for the output names.
 
-## State and recovery
+## Documentation
 
-GCS objects use `PREFIX/repositories/REPOSITORY_ID/pulls/PR/session.sqlite`. Companion artifacts use content-addressed objects below that PR's `artifacts/` directory. Local mode uses the same layout under `--state/objects`. No SQLite or Git process runs against a bucket mount.
+| Guide | Contents |
+| --- | --- |
+| [Configuration](docs/configuration.md) | Models, review policy, execution limits, and persistence. |
+| [Profiles and runtime](docs/profiles-and-runtime.md) | Custom reviewers, scoped repository instructions, and MCP capabilities. |
+| [Operations](docs/operations.md) | Credentials, state storage, recovery, and troubleshooting. |
+| [Architecture](docs/architecture.md) | Agent lifecycle, trust boundaries, and publication. |
+| [Compatibility](docs/compatibility.md) | Pinned dependencies and supported integrations. |
+| [Testing](docs/testing.md) | Automated coverage and live integration boundaries. |
+| [Contributing](CONTRIBUTING.md) | Development setup, code style, and validation. |
 
-Each run downloads the last snapshot into a fresh runner directory, reconstructs tools and workspaces, opens real Pi SQLite, reviews, stops processes, uploads required investigation artifacts, closes Pi and creates a standalone SQLite backup before replacing the database object. First saves use a create-only guard; later saves require the exact downloaded generation. Stale writers fail rather than overwriting newer state. Ordinary failures and graceful cancellation attempt a save. Abrupt runner termination can lose progress since the last successful upload.
+The default suite uses deterministic models and simulated GitHub/MCP/GCS services alongside real Pi Durable and SQLite. Docker isolation has a separate opt-in check. Live model calls, GitHub review writes, and authenticated GCS transfers require account-specific validation; see the [testing guide](docs/testing.md).
 
-See [architecture](docs/architecture.md), [operations and recovery](docs/operations.md), [profile compatibility](docs/profiles-and-runtime.md), and [pinned upstream compatibility](docs/compatibility.md). The complete [v1 brief](docs/sift-v1-design.md) remains the implementation contract.
+## License
 
-## Validation
-
-```sh
-npm run check
-SIFT_DOCKER_TEST=1 SIFT_TEST_SECRET=must-not-leak npm test
-```
-
-Default tests need no secrets. They use deterministic Pi faux models, real Pi Durable and SQLite, and fake MCP/GitHub/GCS boundaries. They cover the actual engine across pushes, publication recovery, native verdicts, human replies, WAL snapshots, generation conflicts, workspace artifacts and the Action-to-CLI entry point. The optional Docker test executes real Pi filesystem and shell operations in the pinned container.
-
-Live model calls, live GitHub review writes, and authenticated GCS transfers are opt-in operations through the CLI. They are not part of the default suite and have not been claimed as validated. The [acceptance map](docs/testing.md) identifies which boundaries are simulated.
+[MIT](LICENSE).
